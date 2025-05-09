@@ -1,33 +1,45 @@
 # name: discourse-avatar-sync
-# about: Syncs avatar from SingleSignOnRecord on login, or uses default if empty
-# version: 0.2
+# about: Syncs avatar from SingleSignOnRecord on login, or uses default if not provided
+# version: 0.3
 # authors: Tasveer Dhillon
+# url: https://github.com/CoC-PD/Discourse-Avatar-Sync
+
+begin
+  Rails.logger.warn("[AvatarSync] Plugin file loaded successfully")
+rescue => e
+  puts "[AvatarSync] Failed to log plugin load: #{e.message}"
+end
 
 after_initialize do
-  DiscourseEvent.on(:user_logged_in) do |user|
-    begin
-      sso_record = SingleSignOnRecord.find_by(user_id: user.id)
+  begin
+    Rails.logger.warn("[AvatarSync] after_initialize hook fired")
 
-      if sso_record
-        avatar_url = sso_record.external_avatar_url
+    DiscourseEvent.on(:user_logged_in) do |user|
+      Rails.logger.warn("[AvatarSync] user_logged_in event for #{user.username}")
 
-        if avatar_url.present?
+      begin
+        sso_record = SingleSignOnRecord.find_by(user_id: user.id)
+
+        if sso_record&.external_avatar_url.present?
           Jobs.enqueue(:download_avatar_from_url, {
             user_id: user.id,
-            url: avatar_url,
+            url: sso_record.external_avatar_url,
             override_gravatar: true
           })
-          Rails.logger.info("[AvatarSync] Enqueued avatar update for user #{user.username} from SSO")
+          Rails.logger.warn("[AvatarSync] Avatar updated from SSO for #{user.username}")
         else
-          # Force Discourse to fall back to default avatar by clearing uploaded avatar
+          # Clear custom avatar and use default fallback
           user.user_avatar&.custom_upload&.destroy
           user.update(uploaded_avatar_id: nil)
           Jobs.enqueue(:generate_avatars, user_id: user.id)
-          Rails.logger.info("[AvatarSync] No external avatar; reverted to default for #{user.username}")
+          Rails.logger.warn("[AvatarSync] No external avatar, reverted to default for #{user.username}")
         end
+      rescue => e
+        Rails.logger.error("[AvatarSync] Error syncing avatar for #{user.username}: #{e.message}")
       end
-    rescue => e
-      Rails.logger.warn("[AvatarSync] Failed avatar sync for #{user.username}: #{e.message}")
     end
+
+  rescue => e
+    Rails.logger.error("[AvatarSync] Error in after_initialize block: #{e.message}")
   end
 end
